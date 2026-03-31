@@ -23,6 +23,16 @@ const destinationJSON = JSON.stringify(DESTINATION);
           <span>{DESTINATION.lat}, {DESTINATION.lng}</span>
         </div>
       </div>
+      <div id="bus-status" class="bus-status">
+        <div class="route-status" id="status-a03">
+          <span class="status-dot status-loading"></span>
+          <span class="status-label">A-03 en tiempo real…</span>
+        </div>
+        <div class="route-status" id="status-a75">
+          <span class="status-dot status-loading"></span>
+          <span class="status-label">A-75 en tiempo real…</span>
+        </div>
+      </div>
     </div>
     <div id="routes-list">
       <p class="loading-text">Buscando rutas de transporte...</p>
@@ -120,6 +130,62 @@ const destinationJSON = JSON.stringify(DESTINATION);
     const destEl = document.createElement('div');
     destEl.style.cssText = `width:14px;height:14px;border-radius:50%;background:#EF4444;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);`;
     new AdvancedMarkerElement({ map, position: DESTINATION, content: destEl, title: 'Tu destino' });
+
+    // --- Live bus location helper ---
+    async function fetchBusLocations({ apiPath, label, color, markerText, statusEl }) {
+      const dot = statusEl.querySelector('.status-dot');
+      const lbl = statusEl.querySelector('.status-label');
+      try {
+        const res = await fetch(apiPath);
+        const json = await res.json();
+        if (!res.ok || json.error) throw new Error(json.error || 'error');
+
+        const buses = json.buses;
+        if (buses && buses.length > 0) {
+          buses.forEach(bus => {
+            const busEl = document.createElement('div');
+            busEl.style.cssText = `
+              width:28px;height:28px;border-radius:6px;
+              background:${color};border:2px solid white;
+              box-shadow:0 2px 8px rgba(0,0,0,0.5);
+              display:flex;align-items:center;justify-content:center;
+              color:white;font-size:9px;font-weight:800;letter-spacing:-0.5px;
+            `;
+            busEl.textContent = markerText;
+            new AdvancedMarkerElement({
+              map,
+              position: { lat: bus.latitude, lng: bus.longitude },
+              content: busEl,
+              title: `${label} · ID: ${bus.id} · ${bus.hora}`,
+            });
+          });
+          dot.className = 'status-dot status-ok';
+          lbl.textContent = `${label} · ${buses.length} unidad${buses.length > 1 ? 'es' : ''} encontrada${buses.length > 1 ? 's' : ''}`;
+        } else {
+          dot.className = 'status-dot status-ok';
+          lbl.textContent = `${label} · sin unidades activas`;
+        }
+      } catch (e) {
+        dot.className = 'status-dot status-error';
+        lbl.textContent = `${label} · sin datos`;
+      }
+    }
+
+    fetchBusLocations({
+      apiPath: '/api/a03-location',
+      label: 'A-03',
+      color: '#E53E3E',
+      markerText: 'A03',
+      statusEl: document.getElementById('status-a03'),
+    });
+
+    fetchBusLocations({
+      apiPath: '/api/a75-location',
+      label: 'A-75',
+      color: '#2B6CB0',
+      markerText: 'A75',
+      statusEl: document.getElementById('status-a75'),
+    });
 
     // Preload KML for both routes
     const ALLOWED_LINES = ['A-03', 'A-75'];
@@ -342,6 +408,34 @@ const destinationJSON = JSON.stringify(DESTINATION);
     flex-direction: column;
     gap: 6px;
   }
+
+  .bus-status {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #f0f0f0;
+    font-size: 11px;
+    color: #4a5568;
+  }
+
+  .route-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-loading { background: #CBD5E0; }
+  .status-ok      { background: #22C55E; }
+  .status-error   { background: #EF4444; }
 
   .coord-row {
     display: flex;
