@@ -1,3 +1,9 @@
 import { defineConfig } from 'astro/config';
 
-export default defineConfig({});
+import cloudflare from '@astrojs/cloudflare';
+
+export default defineConfig({
+  adapter: cloudflare({
+    // prerenderEnvironment: 'node',
+  })
+});
