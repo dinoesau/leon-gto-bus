@@ -3,10 +3,12 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
-    "dev": "astro dev",
-    "start": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview"
+    "dev": "wrangler types && astro dev",
+    "start": "wrangler types && astro dev",
+    "build": "wrangler types && astro check && astro build",
+    "preview": "wrangler types && astro preview",
+    "astro": "astro",
+    "generate-types": "wrangler types"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.1.6",
@@ -15,6 +17,7 @@
     "astro": "^6.1.2"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "wrangler": "^4.79.0"
   },
   "overrides": {
