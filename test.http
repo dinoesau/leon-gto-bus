@@ -1,0 +1,52 @@
+
+
+### Ruta casa SJB 03
+
+# 8#33a92bc6b4d04b08,1,7,1,21.12112,-101.73051,10,21.13129,-101.71705
+
+GET  /leon/websocket_app_ios/socket_request_android_nvo_13611.php?parametro=OCMzM2E5MmJjNmI0ZDA0YjA4LDEsNywxLDIxLjEyMTEyLC0xMDEuNzMwNTEsMTAsMjEuMTMxMjksLTEwMS43MTcwNQ== HTTP/1.1
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 15; Pixel 2 Build/AP3A.241105.008)
+Host: 189.206.79.27
+Connection: Keep-Alive
+Accept-Encoding: gzip
+
+
+
+
+
+
+### Ruta casa SJB 75
+
+# 8#33a92bc6b4d04b08,1,7,2,21.12393,-101.73036,127,21.13504,-101.71784
+
+GET /leon/websocket_app_ios/socket_request_android_nvo_13611.php?parametro=OCMzM2E5MmJjNmI0ZDA0YjA4LDEsNywyLDIxLjEyMzkzLC0xMDEuNzMwMzYsMTI3LDIxLjEzNTA0LC0xMDEuNzE3ODQ= HTTP/1.1
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 15; Pixel 2 Build/AP3A.241105.008)
+Host: 189.206.79.27
+Connection: Keep-Alive
+Accept-Encoding: gzip
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------- TESTING ----------------------------------
+
+
+### Ruta 36
+
+### 8#33a92bc6b4d04b08,1,7,1,21.1171,-101.7071,313,21.10752,-101.66121
+
+GET /leon/websocket_app_ios/socket_request_android_nvo_13611.php?parametro=OCMzM2E5MmJjNmI0ZDA0YjA4LDEsNywxLDIxLjExNzEsLTEwMS43MDcxLDMxMywyMS4xMDc1MiwtMTAxLjY2MTIx HTTP/1.1
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 15; Pixel 2 Build/AP3A.241105.008)
+Host: 189.206.79.27
+Connection: Keep-Alive
+Accept-Encoding: gzip

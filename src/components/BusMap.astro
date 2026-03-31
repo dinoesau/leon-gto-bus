@@ -1,0 +1,532 @@
+---
+const GOOGLE_MAPS_API_KEY = import.meta.env.PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
+const ORIGIN = { lat: 21.123232, lng: -101.731127 };
+const DESTINATION = { lat: 21.13129, lng: -101.71705 };
+
+const originJSON = JSON.stringify(ORIGIN);
+const destinationJSON = JSON.stringify(DESTINATION);
+---
+
+<div id="map-container">
+  <div id="map"></div>
+  <div id="panel">
+    <div id="panel-header">
+      <div class="panel-coords">
+        <div class="coord-row">
+          <span class="coord-dot origin-dot"></span>
+          <span>{ORIGIN.lat}, {ORIGIN.lng}</span>
+        </div>
+        <div class="coord-divider"></div>
+        <div class="coord-row">
+          <span class="coord-dot dest-dot"></span>
+          <span>{DESTINATION.lat}, {DESTINATION.lng}</span>
+        </div>
+      </div>
+    </div>
+    <div id="routes-list">
+      <p class="loading-text">Buscando rutas de transporte...</p>
+    </div>
+  </div>
+</div>
+
+<script is:inline define:vars={{ GOOGLE_MAPS_API_KEY, originJSON, destinationJSON }}>
+  const ORIGIN = JSON.parse(originJSON);
+  const DESTINATION = JSON.parse(destinationJSON);
+
+  // --- KML utilities ---
+
+  function parseKmlCoords(text) {
+    return text.trim().split(/\s+/).map(c => {
+      const parts = c.split(',');
+      return { lat: parseFloat(parts[1]), lng: parseFloat(parts[0]) };
+    }).filter(c => !isNaN(c.lat) && !isNaN(c.lng));
+  }
+
+  async function loadRouteKml(routeId) {
+    const res = await fetch(`/data/${routeId}.kml`);
+    const text = await res.text();
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const out = {};
+    doc.querySelectorAll('Placemark').forEach(pm => {
+      const name = pm.querySelector('name')?.textContent?.trim();
+      const lc = pm.querySelector('LineString coordinates');
+      const pc = pm.querySelector('Point coordinates');
+      if (lc) out[name] = parseKmlCoords(lc.textContent);
+      if (pc && !lc) {
+        const parts = pc.textContent.trim().split(',');
+        out[name] = { lat: parseFloat(parts[1]), lng: parseFloat(parts[0]) };
+      }
+    });
+    return out;
+  }
+
+  // Find the index in coords[] closest to (lat, lng)
+  function nearestIdx(coords, lat, lng) {
+    let best = 0, bestDist = Infinity;
+    coords.forEach((c, i) => {
+      const d = (c.lat - lat) ** 2 + (c.lng - lng) ** 2;
+      if (d < bestDist) { bestDist = d; best = i; }
+    });
+    return best;
+  }
+
+  // Try ida then regreso — return the direction where boarding comes before alighting
+  function detectDirection(kml, lineName, boardingLat, boardingLng, alightingLat, alightingLng) {
+    for (const suffix of ['ida', 'regreso']) {
+      const coords = kml[`${lineName}-${suffix}`];
+      if (!coords || coords.length < 2) continue;
+      const bIdx = nearestIdx(coords, boardingLat, boardingLng);
+      const aIdx = nearestIdx(coords, alightingLat, alightingLng);
+      if (aIdx > bIdx) return { coords, boardingIdx: bIdx, alightingIdx: aIdx };
+    }
+    return null;
+  }
+
+  // Draw a polyline and return it so we can control it later
+  function drawPolyline(map, path, color, weight, opacity, zIndex) {
+    return new google.maps.Polyline({ map, path, strokeColor: color, strokeWeight: weight, strokeOpacity: opacity, zIndex });
+  }
+
+  // --- Main ---
+
+  async function initMap() {
+    const { Loader } = await import('https://esm.sh/@googlemaps/js-api-loader@1.16.6');
+
+    const loader = new Loader({
+      apiKey: GOOGLE_MAPS_API_KEY,
+      version: 'weekly',
+      libraries: ['maps', 'marker', 'routes'],
+    });
+
+    const { Map } = await loader.importLibrary('maps');
+    const { AdvancedMarkerElement } = await loader.importLibrary('marker');
+
+    const map = new Map(document.getElementById('map'), {
+      center: { lat: (ORIGIN.lat + DESTINATION.lat) / 2, lng: (ORIGIN.lng + DESTINATION.lng) / 2 },
+      zoom: 14,
+      mapId: 'bus-routes-map',
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+    });
+
+    // User origin marker (green)
+    const originEl = document.createElement('div');
+    originEl.style.cssText = `width:14px;height:14px;border-radius:50%;background:#22C55E;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);`;
+    new AdvancedMarkerElement({ map, position: ORIGIN, content: originEl, title: 'Tu origen' });
+
+    // User destination marker (red)
+    const destEl = document.createElement('div');
+    destEl.style.cssText = `width:14px;height:14px;border-radius:50%;background:#EF4444;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.4);`;
+    new AdvancedMarkerElement({ map, position: DESTINATION, content: destEl, title: 'Tu destino' });
+
+    // Preload KML for both routes
+    const ALLOWED_LINES = ['A-03', 'A-75'];
+    const ROUTE_COLORS = { 'A-03': '#E53E3E', 'A-75': '#2B6CB0' };
+    const kmlData = {};
+    await Promise.all(ALLOWED_LINES.map(async id => {
+      kmlData[id] = await loadRouteKml(id);
+    }));
+
+    const directionsService = new google.maps.DirectionsService();
+    const routesList = document.getElementById('routes-list');
+
+    directionsService.route(
+      {
+        origin: ORIGIN,
+        destination: DESTINATION,
+        travelMode: google.maps.TravelMode.TRANSIT,
+        provideRouteAlternatives: true,
+        transitOptions: {
+          modes: [google.maps.TransitMode.BUS],
+          routingPreference: google.maps.TransitRoutePreference.FEWER_TRANSFERS,
+        },
+      },
+      (result, status) => {
+        routesList.innerHTML = '';
+
+        if (status !== 'OK') {
+          routesList.innerHTML = `<p class="error-text">No se encontraron rutas (${status})</p>`;
+          return;
+        }
+
+        // Filter: single-transfer (direct bus) on A-03 or A-75 only
+        const directRoutes = result.routes.filter(route => {
+          const transitSteps = route.legs[0].steps.filter(s => s.travel_mode === 'TRANSIT');
+          if (transitSteps.length !== 1) return false;
+          const lineName = transitSteps[0].transit.line.short_name || transitSteps[0].transit.line.name || '';
+          return ALLOWED_LINES.includes(lineName);
+        });
+
+        if (directRoutes.length === 0) {
+          routesList.innerHTML = `<p class="error-text">No se encontraron rutas A-03 o A-75 directas entre estos puntos.</p>`;
+          return;
+        }
+
+        // Track all drawn polylines per route for highlight control
+        const routePolylines = [];
+
+        directRoutes.forEach((route, idx) => {
+          const legs = route.legs[0];
+          const transitStep = legs.steps.find(s => s.travel_mode === 'TRANSIT');
+          const lineName = transitStep.transit.line.short_name || transitStep.transit.line.name;
+          const color = ROUTE_COLORS[lineName] || '#555';
+
+          // Boarding and alighting stops from Directions API
+          const boardingLat = transitStep.transit.departure_stop.location.lat();
+          const boardingLng = transitStep.transit.departure_stop.location.lng();
+          const alightingLat = transitStep.transit.arrival_stop.location.lat();
+          const alightingLng = transitStep.transit.arrival_stop.location.lng();
+
+          // Draw from KML data — auto-detect ida vs regreso direction
+          const kml = kmlData[lineName];
+          const polylines = [];
+          const direction = kml
+            ? detectDirection(kml, lineName, boardingLat, boardingLng, alightingLat, alightingLng)
+            : null;
+
+          if (direction) {
+            const { coords, boardingIdx, alightingIdx } = direction;
+
+            // Segment 1: bus origin → user boarding stop (dimmed)
+            if (boardingIdx > 0) {
+              polylines.push(drawPolyline(map, coords.slice(0, boardingIdx + 1), color, 4, 0.3, 5));
+            }
+
+            // Segment 2: user boarding → user destination (full brightness)
+            polylines.push(drawPolyline(map, coords.slice(boardingIdx, alightingIdx + 1), color, 6, 1, 10));
+
+            // Fit map to show the relevant portion (bus start → user destination)
+            if (idx === 0) {
+              const bounds = new google.maps.LatLngBounds();
+              coords.slice(0, alightingIdx + 1).forEach(c => bounds.extend(c));
+              map.fitBounds(bounds, { padding: 60 });
+            }
+          }
+
+          routePolylines.push(polylines);
+
+          // Boarding stop marker (bus icon dot)
+          const boardingEl = document.createElement('div');
+          boardingEl.style.cssText = `width:11px;height:11px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);`;
+          new AdvancedMarkerElement({
+            map,
+            position: { lat: boardingLat, lng: boardingLng },
+            content: boardingEl,
+            title: `Abordas: ${transitStep.transit.departure_stop.name}`,
+          });
+
+          // Alighting stop marker
+          const alightEl = document.createElement('div');
+          alightEl.style.cssText = `width:11px;height:11px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);`;
+          new AdvancedMarkerElement({
+            map,
+            position: { lat: alightingLat, lng: alightingLng },
+            content: alightEl,
+            title: `Bajas: ${transitStep.transit.arrival_stop.name}`,
+          });
+
+          // --- Sidebar card ---
+          const transitSteps = legs.steps.filter(s => s.travel_mode === 'TRANSIT');
+
+          const lines = transitSteps.map(s => {
+            const t = s.transit;
+            return `<span class="line-badge" style="background:${t.line.color || color};color:${t.line.text_color || '#fff'}">${t.line.short_name || t.line.name}</span>`;
+          }).join('');
+
+          const stopsHTML = legs.steps.map(step => {
+            if (step.travel_mode === 'WALKING') {
+              return `<div class="step walk-step">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 4a1 1 0 1 0 2 0 1 1 0 0 0-2 0"/><path d="m7 20 2-8 3 3 2-5 3 5"/><path d="m11 12-1-4 4 1"/></svg>
+                <span>${step.duration.text} a pie · ${step.distance.text}</span>
+              </div>`;
+            }
+            const t = step.transit;
+            return `<div class="step transit-step">
+              <span class="step-badge" style="background:${t.line.color || color};color:${t.line.text_color || '#fff'}">${t.line.short_name || t.line.name}</span>
+              <div class="step-detail">
+                <strong>${t.departure_stop.name}</strong>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                <strong>${t.arrival_stop.name}</strong>
+                <small>${t.num_stops} paradas · ${step.duration.text}</small>
+              </div>
+            </div>`;
+          }).join('');
+
+          const card = document.createElement('div');
+          card.className = 'route-card';
+          card.dataset.idx = idx;
+          card.innerHTML = `
+            <div class="card-header">
+              <div class="card-title">
+                <span class="route-num">${idx + 1}</span>
+                <div class="card-meta">
+                  <div class="lines-row">${lines || '<span class="no-transit">Solo a pie</span>'}</div>
+                  <div class="card-summary">
+                    <strong>${legs.duration.text}</strong>
+                    <span>·</span>
+                    <span>${legs.distance.text}</span>
+                    <span>·</span>
+                    <span>${legs.departure_time?.text || ''} → ${legs.arrival_time?.text || ''}</span>
+                  </div>
+                </div>
+              </div>
+              <button class="toggle-card" data-idx="${idx}" data-open="false">▶</button>
+            </div>
+            <div class="card-steps" id="steps-${idx}" style="display:none">${stopsHTML}</div>
+          `;
+          routesList.appendChild(card);
+
+          card.querySelector('.toggle-card').addEventListener('click', e => {
+            const btn = e.currentTarget;
+            const open = btn.dataset.open === 'true';
+            document.getElementById(`steps-${idx}`).style.display = open ? 'none' : 'block';
+            btn.dataset.open = String(!open);
+            btn.textContent = open ? '▶' : '▼';
+          });
+
+          card.addEventListener('click', e => {
+            if (e.target.closest('.toggle-card')) return;
+            document.querySelectorAll('.route-card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            // Dim all other routes
+            routePolylines.forEach((pls, i) => {
+              pls.forEach(pl => {
+                const isActive = i === idx;
+                pl.setOptions({ strokeOpacity: isActive ? (pl.get('strokeOpacity') > 0.5 ? 1 : 0.3) : 0.15 });
+              });
+            });
+          });
+        });
+      }
+    );
+  }
+
+  initMap();
+</script>
+
+<style>
+  #map-container {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    gap: 16px;
+  }
+
+  #map {
+    flex: 1;
+    border-radius: 12px;
+    overflow: hidden;
+    min-height: 400px;
+  }
+
+  #panel {
+    width: 300px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+
+  #panel-header {
+    background: white;
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  }
+
+  .panel-coords {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .coord-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #4a5568;
+    font-family: monospace;
+  }
+
+  .coord-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .origin-dot { background: #22C55E; }
+  .dest-dot   { background: #EF4444; }
+
+  .coord-divider {
+    width: 2px;
+    height: 12px;
+    background: #e2e8f0;
+    margin-left: 4px;
+  }
+
+  #routes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .loading-text, .error-text {
+    font-size: 13px;
+    color: #718096;
+    text-align: center;
+    padding: 20px 0;
+  }
+
+  .route-card {
+    background: white;
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+
+  .route-card:hover {
+    box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  }
+
+  .route-card.selected {
+    border-color: #2563EB;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .card-title {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex: 1;
+  }
+
+  .route-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #EDF2F7;
+    color: #4a5568;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .card-meta {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .lines-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .line-badge {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    letter-spacing: 0.03em;
+  }
+
+  .no-transit {
+    font-size: 11px;
+    color: #718096;
+  }
+
+  .card-summary {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #718096;
+    flex-wrap: wrap;
+  }
+
+  .card-summary strong {
+    color: #2d3748;
+    font-size: 12px;
+  }
+
+  .toggle-card {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #a0aec0;
+    font-size: 10px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+  }
+
+  .card-steps {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #f0f0f0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .step {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11px;
+    color: #4a5568;
+  }
+
+  .walk-step {
+    color: #718096;
+  }
+
+  .step-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+
+  .step-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .step-detail strong {
+    font-size: 11px;
+    color: #2d3748;
+  }
+
+  .step-detail small {
+    font-size: 10px;
+    color: #a0aec0;
+  }
+
+  @media (max-width: 640px) {
+    #map-container { flex-direction: column; }
+    #panel { width: 100%; }
+  }
+</style>
