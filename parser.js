@@ -40,10 +40,21 @@ function parseCustomPayload(dataString) {
     ];
   });
 
+  // add names to the filtered data instead of column index to only some of the columns
+  const namedFilteredData = filteredData.map(row => {
+    return {
+      id: row[5],
+      latitude: row[2],
+      longitude: row[3],
+      hora: row[11],
+    };
+  });
+
   return {
     pagination: paginationData,
     data: parsedRows,
-    filteredData: filteredData
+    filteredData: filteredData,
+    namedFilteredData: namedFilteredData
   };
 }
 
@@ -59,4 +70,4 @@ console.log("Pagination/Meta:", result.pagination);
 
 
 // console.table(result.data);
-console.table(result.filteredData);
+console.table(result.namedFilteredData);
