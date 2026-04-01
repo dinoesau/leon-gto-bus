@@ -12,5 +12,8 @@
 	},
 	"observability": {
 		"enabled": true
+	},
+	"vars": {
+		"PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCAnX55KfL9cjepjrYz6BefLeI0XtRMEsw"
 	}
 }
